@@ -1,0 +1,1704 @@
+---
+title: "StonerCh2"
+author: "Shane Stoner"
+date: "6/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(dplyr)
+library(zoo)
+library(forcats)
+library(tidyr)
+```
+
+```{r Thermograms stacked / overlain Surface, echo = FALSE}
+
+
+multiplot = function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+  if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+fraccols <- c(`Bulk Soil` = '#762a83', FPOM = '#fd8d3c', OPOM = '#d94801',  MOM = '#a63603',
+               #`NaF Extract` = '#6a51a3', 
+              `NaF Res.` = '#1d91c0', `H2O2 Res.` = '#253494')
+
+setwd('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/June2019_Thermos/All')
+list.files(pattern = ".csv")
+xyz <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/June2019_Thermos/All/smooth_WeP4_0-10_Bulk.csv')
+
+zb <- data.frame(matrix(ncol = 10))
+colnames(zb) <- c(colnames(xyz), "fraction", "Depth", "CO2_smooth", "CO2_sm_norm")
+fz <- data.frame(temp = seq(120, 700))
+
+for(x in list.files(pattern = ".csv")){
+  xb <- data.frame(read.csv(x),
+             fraction = rep(unlist(strsplit(x, split="_"))[4], nrow(read.csv(x))),
+             Depth = rep(unlist(strsplit(x, split="_"))[3], nrow(read.csv(x))))
+  xb %>%
+    select(c(colnames(xyz), "fraction","Depth")) %>%
+    filter(temp >=120 & temp <= 700) %>%
+    left_join(fz, .) %>%
+    #mutate(CO2_smooth = rollmean(na.spline(CO2_av, x = fz$temp), k = 20))
+
+    mutate(CO2_smooth = rollmean(unlist(spline(temp, CO2_av, xout = fz$temp)$y),
+                                 k = 20, align = 'center', fill = 'extend')) %>% #glimpse()
+    mutate(CO2_sm_norm = abs(CO2_smooth / max(CO2_smooth))) %>%
+    mutate(fraction = rep(unlist(strsplit(x, split="_"))[4], length(fz$temp))) %>%
+    mutate(Depth = rep(unlist(strsplit(x, split="_"))[3], length(fz$temp))) %>%
+    rbind(zb, .) -> zb
+
+  #colnames(xb) <- colnames(zb)
+  #zb <- rbind(zb, xb)
+}
+zb <- zb[-1,]
+zb$fraction <- unlist(lapply(zb$fraction, function(x) unlist(strsplit(x, ".csv"))[1]))
+
+# zb %>%
+#   drop_na(Depth) %>%
+#   ggplot(aes(temp, CO2_sm_norm, color = fraction)) + geom_point() + facet_wrap(~Depth)
+
+zb$fraction <- as.character(factor(zb$fraction, levels = c("Bulk", "FPOM", "OPOM", "MOM", "ExtrRes", "H2O2Res"),
+                      ordered = TRUE))
+
+zb %>% 
+  mutate(fraction = ifelse(fraction == "ExtrRes", "NaF Res.",
+                           ifelse(fraction == "H2O2Res", "H2O2 Res.",
+                                  ifelse(fraction == "Bulk", "Bulk Soil",
+                                  fraction)))) -> zb
+
+Fraclu <- data.frame(fraction = c("Bulk Soil", "FPOM", "OPOM", "MOM", "MOM", "NaF Res.", "H2O2 Res.",
+                                  "Bulk Soil", "FPOM", "OPOM", "MOM", "MOM", "NaF Res.", "H2O2 Res."),
+                     prop = c(1, 0.087, 0.062, 0.851, 1, 0.338, 0.159,
+                              1, 0.156, 0.082, 0.763, 1, 0.392, 0.23),
+                     group = c("Bulk Soil", "Density", "Density", "Density",
+                               "MOM", "Chemical", "Chemical",
+                               "Bulk Soil", "Density", "Density", "Density",
+                               "MOM", "Chemical", "Chemical"),
+                     Depth = c(rep("0-10", 7), rep("30-50", 7)))
+
+#Density Stacked Thermos
+zb %>%
+  drop_na(Depth) %>%
+  dplyr::mutate(fraction = ifelse(fraction == "Bulk", "Bulk Soil", fraction)) %>% #glimpse()
+  dplyr::mutate(fraction = fct_relevel(fraction,
+                           c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                      "NaF Res.", "H2O2 Res."))) %>%
+  left_join(y = Fraclu, by = c("fraction" = "fraction", "Depth" = "Depth")) %>% #View()
+  #filter(Depth == "0-10") %>%
+  dplyr::filter(group == "Density" | group == 'Bulk Soil') %>% #View()
+  dplyr::mutate(total = CO2_sm_norm * prop) %>% #glimpse()
+  group_by(Depth, temp, group) %>% #glimpse()
+  dplyr::summarize(prop_sum = sum(total)) %>% 
+  ggplot() +
+    geom_line(data = zb %>%
+                drop_na(Depth) %>%
+                left_join(y = Fraclu, by = c("fraction" = "fraction", "Depth" = "Depth")) %>%
+                #filter(Depth == "0-10") %>%
+                filter(group == "Density" | group == 'Bulk Soil') %>%
+                group_by(Depth) %>%
+                mutate(total = CO2_sm_norm * prop),
+              aes(x = temp, y= total / sum(total) * 10, color = fraction), size = 1.2) +
+    geom_line(aes(x = temp, y= prop_sum / sum(prop_sum) * 10, color = group, linetype = group), size = 1.3) +
+    #scale_y_continuous(breaks = c(0.00, 0.002, 0.004, 0.006, 0.008, 0.01)) +
+    theme_bw() + theme(axis.text = element_text(face = "bold")) +
+    theme(text = element_text(size = 14),
+          axis.title.y = element_blank(),
+          axis.title.x = element_blank(),
+          legend.position = "") + 
+    facet_wrap(~Depth) +
+    ylab("Proportional Thermogram") + xlab("Temperature (C)") +
+    scale_color_manual(values = c(fraccols, "Density" = "#252525")) -> d
+
+#Chemical stacked thermos
+zb %>%
+  drop_na(Depth) %>%
+  dplyr::mutate(fraction = ifelse(fraction == "H2O2Res", "H2O2 Res.", fraction)) %>%
+  dplyr::mutate(fraction = ifelse(fraction == "ExtrRes", "NaF Res.", fraction)) %>%
+  dplyr::mutate(fraction = fct_relevel(fraction,
+                                c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                  "NaF Res.", "H2O2 Res."))) %>%
+  left_join(y = Fraclu, by = c("fraction" = "fraction", "Depth" = "Depth")) %>%
+  #filter(Depth == "0-10") %>%
+  filter(group == "Chemical" | group == "MOM") %>%
+  mutate(total = CO2_sm_norm * prop) %>%
+  group_by(Depth, temp, group) %>%
+  #summarize(prop_sum = sum(total)) %>%
+  ggplot() +
+    geom_line(aes(x = temp, y= total / sum(total) * 10, color = fraction, linetype = group), size = 1.3) +
+    #scale_y_continuous(breaks = c(0.00, 0.002, 0.004, 0.006, 0.008, 0.01)) +
+    scale_linetype_manual(values = c(1,1,1)) +
+    theme_bw() + theme(axis.text = element_text(face = "bold")) + #labs(color = "Fraction") +
+    theme(text = element_text(size = 14), 
+          legend.position = "",
+          axis.title.y = element_blank(),
+          strip.text.x = element_blank()) + facet_wrap(~Depth) +
+    ylab("Proportional Thermogram") + xlab("Temperature (C)") +
+    scale_color_manual(values = c(fraccols, "Chemical" = "#252525")) -> c
+
+multiplot(d,c) #Exported to SVG at 600x600
+
+Fraclu %>% 
+    # dplyr::mutate(fraction = fct_relevel(fraction,
+    #                             c("Bulk Soil", "FPOM", "OPOM", "MOM",
+    #                               "NaF Res.", "H2O2 Res."))) %>%
+    dplyr::filter(fraction != "NaF Extract") %>% 
+    dplyr::mutate(fraction = factor(fraction, levels = c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                  "NaF Res.", "H2O2 Res."), ordered = TRUE)) %>% #View()
+    ggplot(aes(x = prop, y = prop, color = fraction)) + theme_bw() +
+      labs(color = "Fraction") +
+      geom_line(size = 1.2) +
+      theme(legend.key.height = unit(0.7, "cm"),
+            legend.key.width = unit(1.1, "cm"),
+            legend.title = element_text(size = 14),
+            legend.text = element_text(size = 12)) +
+      scale_color_manual(values = fraccols)
+
+Fraclu %>% 
+    # dplyr::mutate(fraction = fct_relevel(fraction,
+    #                             c("Bulk Soil", "FPOM", "OPOM", "MOM",
+    #                               "NaF Res.", "H2O2 Res."))) %>%
+    dplyr::filter(fraction == "MOM") %>% 
+    # dplyr::mutate(fraction = factor(fraction, levels = c("Bulk Soil", "FPOM", "OPOM", "MOM",
+    #                               "NaF Res.", "H2O2 Res."), ordered = TRUE)) %>% #View()
+    dplyr::mutate(fraction = "Sum") %>% #View()
+    ggplot(aes(x = prop, y = prop, color = fraction)) + theme_bw() +
+      #labs(color = "Fraction") +
+      geom_line(size = 1.2, linetype = 2) +
+      scale_color_manual(values = "black") +
+      theme(legend.key.height = unit(0.7, "cm"),
+            legend.key.width = unit(1.1, "cm"),
+            legend.title = element_text(size = 14),
+            legend.text = element_text(size = 12))
+
+```
+
+
+```{r Thermograms stacked / overlain Surface by DENSITY, echo = FALSE}
+
+fun_range <- function(x) {                              # Create user-defined function
+  (x - min(x, na.rm = F)) / (max(x, na.rm = F) - min(x, na.rm = F))
+}
+
+multiplot = function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+  if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+fraccols <- c(`Bulk Soil` = '#762a83', FPOM = '#fd8d3c', OPOM = '#d94801',  MOM = '#a63603',
+               #`NaF Extract` = '#6a51a3', 
+              `NaF Res.` = '#1d91c0', `H2O2 Res.` = '#253494')
+
+setwd('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/June2019_Thermos/All')
+list.files(pattern = ".csv")
+xyz <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/June2019_Thermos/All/smooth_WeP4_0-10_Bulk.csv')
+
+zb <- data.frame(matrix(ncol = 11))
+colnames(zb) <- c(colnames(xyz), "fraction", "Depth", "CO2_smooth", "CO2_sm_norm", "CO2_dens")
+fz <- data.frame(temp = seq(120, 700))
+
+for(x in list.files(pattern = ".csv")){
+  xb <- data.frame(read.csv(x),
+             fraction = rep(unlist(strsplit(x, split="_"))[4], nrow(read.csv(x))),
+             Depth = rep(unlist(strsplit(x, split="_"))[3], nrow(read.csv(x))))
+  xb %>%
+    select(c(colnames(xyz), "fraction","Depth")) %>%
+    filter(temp >=120 & temp <= 700) %>%
+    left_join(fz, .) %>%
+    #mutate(CO2_smooth = rollmean(na.spline(CO2_av, x = fz$temp), k = 20))
+
+    mutate(CO2_smooth = rollmean(unlist(spline(temp, CO2_av, xout = fz$temp)$y),
+                                 k = 20, align = 'center', fill = 'extend')) %>% #glimpse()
+    mutate(CO2_sm_norm = abs(CO2_smooth / max(CO2_smooth))) %>%
+    mutate(fraction = rep(unlist(strsplit(x, split="_"))[4], length(fz$temp))) %>%
+    mutate(Depth = rep(unlist(strsplit(x, split="_"))[3], length(fz$temp))) %>%
+    mutate(CO2_dens = CO2_sm_norm / sum(CO2_sm_norm, na.rm = F)) %>% 
+    rbind(zb, .) -> zb
+
+  #colnames(xb) <- colnames(zb)
+  #zb <- rbind(zb, xb)
+}
+zb <- zb[-1,]
+zb$fraction <- unlist(lapply(zb$fraction, function(x) unlist(strsplit(x, ".csv"))[1]))
+
+# zb %>%
+#   drop_na(Depth) %>%
+#   ggplot(aes(temp, CO2_sm_norm, color = fraction)) + geom_point() + facet_wrap(~Depth)
+
+zb$fraction <- as.character(factor(zb$fraction, levels = c("Bulk", "FPOM", "OPOM", "MOM", "ExtrRes", "H2O2Res"),
+                      ordered = TRUE))
+
+zb %>% 
+  mutate(fraction = ifelse(fraction == "ExtrRes", "NaF Res.",
+                           ifelse(fraction == "H2O2Res", "H2O2 Res.",
+                                  ifelse(fraction == "Bulk", "Bulk Soil",
+                                  fraction)))) -> zb
+
+Fraclu <- data.frame(fraction = c("Bulk Soil", "FPOM", "OPOM", "MOM", "MOM", "NaF Res.", "H2O2 Res.",
+                                  "Bulk Soil", "FPOM", "OPOM", "MOM", "MOM", "NaF Res.", "H2O2 Res."),
+                     prop = c(1, 0.087, 0.062, 0.851, 1, 0.338, 0.159,
+                              1, 0.156, 0.082, 0.763, 1, 0.392, 0.23),
+                     group = c("Bulk Soil", "Density", "Density", "Density",
+                               "MOM", "Chemical", "Chemical",
+                               "Bulk Soil", "Density", "Density", "Density",
+                               "MOM", "Chemical", "Chemical"),
+                     Depth = c(rep("0-10", 7), rep("30-50", 7)))
+
+#Density Stacked Thermos
+zb %>%
+  drop_na(Depth) %>%
+  dplyr::mutate(fraction = ifelse(fraction == "Bulk", "Bulk Soil", fraction)) %>% #glimpse()
+  dplyr::mutate(fraction = fct_relevel(fraction,
+                           c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                      "NaF Res.", "H2O2 Res."))) %>%
+  left_join(y = Fraclu, by = c("fraction" = "fraction", "Depth" = "Depth")) %>% #View()
+  #filter(Depth == "0-10") %>%
+  dplyr::filter(group == "Density" | group == 'Bulk Soil') %>% #View()
+  dplyr::mutate(total = CO2_dens * prop) %>% #View()
+  group_by(Depth, temp, group) %>% #glimpse()
+  dplyr::summarize(prop_sum = sum(total)) %>% #View()
+  ggplot() +
+    geom_line(data = zb %>%
+                drop_na(Depth) %>%
+                left_join(y = Fraclu, by = c("fraction" = "fraction", "Depth" = "Depth")) %>%
+                #filter(Depth == "0-10") %>%
+                filter(group == "Density" | group == 'Bulk Soil') %>%
+                group_by(Depth) %>%
+                mutate(total = CO2_dens * prop),
+              aes(x = temp, y= total, color = fraction), size = 1.2) +
+    geom_line(aes(x = temp, y= prop_sum, color = group, linetype = group), size = 1.3) +
+    scale_y_continuous(breaks = c(0.00, 0.002, 0.004, 0.006, 0.008)) +
+    theme_bw() + theme(axis.text = element_text(face = "bold")) +
+    theme(text = element_text(size = 14),
+          axis.title.y = element_blank(),
+          axis.title.x = element_blank(),
+          legend.position = "",
+          strip.background = element_rect(fill = "white"),
+          strip.text = element_text(face = "bold")) + 
+    xlim(130, 600) +
+    facet_wrap(~Depth) +
+    ylab("Proportional Thermogram") + xlab("Temperature (˚C)") +
+    scale_color_manual(values = c(fraccols, "Density" = "#252525")) -> d
+
+#Chemical stacked thermos
+zb %>%
+  drop_na(Depth) %>%
+  dplyr::mutate(fraction = ifelse(fraction == "H2O2Res", "H2O2 Res.", fraction)) %>%
+  dplyr::mutate(fraction = ifelse(fraction == "ExtrRes", "NaF Res.", fraction)) %>%
+  dplyr::mutate(fraction = fct_relevel(fraction,
+                                c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                  "NaF Res.", "H2O2 Res."))) %>%
+  left_join(y = Fraclu, by = c("fraction" = "fraction", "Depth" = "Depth")) %>%
+  #filter(Depth == "0-10") %>%
+  filter(group == "Chemical" | group == "MOM") %>%
+  mutate(total = CO2_dens * prop) %>%
+  group_by(Depth, temp, group) %>%
+  #summarize(prop_sum = sum(total)) %>%
+  ggplot() +
+    geom_line(aes(x = temp, y= total, color = fraction, linetype = group), size = 1.3) +
+    #scale_y_continuous(breaks = c(0.00, 0.002, 0.004, 0.006, 0.008, 0.01)) +
+    scale_linetype_manual(values = c(1,1,1)) +
+    theme_bw() + theme(axis.text = element_text(face = "bold")) + #labs(color = "Fraction") +
+    theme(text = element_text(size = 14), 
+          legend.position = "",
+          axis.title.y = element_blank(),
+          strip.text.x = element_blank()) + facet_wrap(~Depth) +
+    ylab("Proportional Thermogram") + xlab("Temperature (˚C)") +
+    xlim(130, 600) +
+    scale_color_manual(values = c(fraccols, "Chemical" = "#252525")) -> c
+
+multiplot(d,c) #Exported to SVG at 600x600
+
+Fraclu %>% 
+    # dplyr::mutate(fraction = fct_relevel(fraction,
+    #                             c("Bulk Soil", "FPOM", "OPOM", "MOM",
+    #                               "NaF Res.", "H2O2 Res."))) %>%
+    dplyr::filter(fraction != "NaF Extract") %>% 
+    dplyr::mutate(fraction = factor(fraction, levels = c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                  "NaF Res.", "H2O2 Res."), ordered = TRUE)) %>% #View()
+    ggplot(aes(x = prop, y = prop, color = fraction)) + theme_bw() +
+      labs(color = "Fraction") +
+      geom_line(size = 1.2) +
+      theme(legend.key.height = unit(0.7, "cm"),
+            legend.key.width = unit(1.1, "cm"),
+            legend.title = element_text(size = 14),
+            legend.text = element_text(size = 12)) +
+      scale_color_manual(values = fraccols)
+
+Fraclu %>% 
+    # dplyr::mutate(fraction = fct_relevel(fraction,
+    #                             c("Bulk Soil", "FPOM", "OPOM", "MOM",
+    #                               "NaF Res.", "H2O2 Res."))) %>%
+    dplyr::filter(fraction == "MOM") %>% 
+    # dplyr::mutate(fraction = factor(fraction, levels = c("Bulk Soil", "FPOM", "OPOM", "MOM",
+    #                               "NaF Res.", "H2O2 Res."), ordered = TRUE)) %>% #View()
+    dplyr::mutate(fraction = "Sum") %>% #View()
+    ggplot(aes(x = prop, y = prop, color = fraction)) + theme_bw() +
+      #labs(color = "Fraction") +
+      geom_line(size = 1.2, linetype = 2) +
+      scale_color_manual(values = "black") +
+      theme(legend.key.height = unit(0.7, "cm"),
+            legend.key.width = unit(1.1, "cm"),
+            legend.title = element_text(size = 14),
+            legend.text = element_text(size = 12))
+
+```
+
+```{r Area filled thermogram stacks, Surface, echo = FALSE}
+
+#### Plots for viewing relative contribution to thermograms at temp
+library(plyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(tidyverse)
+library(magrittr)
+
+wrapper <- function(x, ...){
+  paste(strwrap(x, ...), collapse = "\n")
+}
+
+setwd('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/June2019_Thermos')
+
+Sdfiles <- list.files('./SurfDens',
+           full.names = TRUE)
+
+#Sd <- ldply(Sd, read_csv)
+
+#surfProps <- subProps
+surfProps <- c(MOM = 85.1, FPOM = 8.7, OPOM = 6.2, NaF = 33.8, H2O2 = 15.9)
+
+Sd <- data.frame(matrix(ncol = 5))
+tz <- data.frame(temp = seq(100, 700))
+
+smoother = 10
+
+for(x in Sdfiles){
+  dat <- read.csv(x)
+  dat$CO2_normal <- dat$Moving. / max(dat$Moving.)
+
+  colnames(Sd) <- c('temp','Moving.',"Normal","Prop",'Frac')
+
+  if(grepl("Bulk", x)) {
+    dat$Frac = "Bulk"
+    dat$CO2_prop <- 1}
+  if(grepl("FPOM", x)) {
+    dat$Frac = "FPOM"
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["FPOM"] / 100)}
+  if(grepl("OPOM", x)) {
+    dat$Frac = "OPOM"
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["OPOM"] / 100)}
+  if(grepl("MOM", x)) {
+    dat$Frac = "MOM"
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["MOM"] / 100)}
+  if(grepl("H2O2", x)) {
+    dat$Frac = "H2O2 Res."
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["H2O2"] / 100)}
+  if(grepl("NaF", x)) {
+    dat$Frac = "NaF Res."
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["NaF"] / 100)}
+
+  dat <- join(tz, dat)
+  dat <- data.frame(temp = dat$temp,
+                    Moving. = dat$Moving.,
+                    Normal = abs(dat$Moving. / max(na.omit(dat$Moving.))),
+                    Prop = rollmean(na.spline(dat$CO2_prop), smoother,
+                                    fill = abs(min(na.omit(dat$CO2_prop)))),
+                    Frac = sort(dat$Frac)[1])
+  Sd <- rbind(Sd, dat)
+}
+Sd <- Sd[-1,]
+#Sd$Frac <- factor(Sd$Frac, levels = c("MOM","H2O2 Res.","NaF Res."), ordered = TRUE)
+Sd$Frac <- factor(Sd$Frac, levels = c("FPOM","OPOM","MOM","Bulk"), ordered = TRUE)
+
+Sd %>%
+  filter(temp >= 100 & temp <= 700) %>%
+  ggplot(aes(x = temp, y = Normal, color = Frac)) + geom_line(size = 2) + theme_bw()
+  #ggplot(aes(x = temp, ymax = Normal, ymin = 0, fill = Frac)) + geom_ribbon() + theme_bw()
+
+Sd %>%
+  filter(temp >= 100 & temp <= 700 & Frac != "Bulk" ) %>%
+  ggplot(aes(x = temp, y = Prop, color = Frac)) + geom_line(size = 2) + theme_bw()
+
+# Sd %>%
+#   filter(temp >= 100 & temp <= 700 & Frac != "Bulk") %>%
+#   ggplot(aes(x = temp,fill = Frac)) +
+#     geom_bar(position = 'fill') + theme_minimal()
+
+Sd %>%
+  filter(Frac != "Bulk") %>%
+  group_by(temp) %>%
+  dplyr::summarize(Prop, sum_prop =sum(Prop))  -> temp_prop
+
+# temp_prop = data.frame(temp = unique(filter(temp_prop, temp > 140 & temp < 700)$temp),
+#                        tot_prop = unique(filter(temp_prop, temp > 140 & temp < 700)$sum_prop))
+
+#100% filled view
+# Sd %>% join(temp_prop) %>%
+#   filter(Frac != "Bulk") %>%
+#   mutate(whole_prop = Prop / tot_prop) %>%
+#   ggplot(aes(x = temp, y = whole_prop, fill = Frac)) + geom_area() +
+#   theme_minimal() + xlim(170, 700) +
+#   scale_fill_manual(values = c('steelblue', 'orange', 'green4'))
+
+Sd %>%
+  filter(Frac != "Bulk") %>%
+  group_by(temp) %>%
+  dplyr::summarize(Prop, sum_prop =sum(Prop)) -> temp_prop
+
+temp_prop <- data.frame(temp_prop[match(unique(temp_prop$temp), temp_prop$temp),])[-2]
+
+Sd$Frac <- factor(Sd$Frac, levels = c("Bulk", "MOM", "OPOM","FPOM"))
+Sd$Fraction <- factor(Sd$Frac, levels = c("Bulk", "MOM", "OPOM","FPOM"))
+
+Sd %>% join(temp_prop, by = "temp") %>%
+  filter(Frac != "Bulk") %>%
+  filter(temp > 160 & temp < 550) %>%
+  mutate(whole_Prop = Prop / sum_prop) %>%
+  ggplot(aes(x = temp, y = whole_Prop, fill = Frac)) + geom_area() +
+  scale_fill_manual(values = c("orange", 'darkgreen','steelblue3')) +
+  theme(panel.grid.major = element_blank(), axis.title = element_text(size = 15),
+        panel.grid.minor = element_blank(), axis.text = element_text(size = 12)) +
+  ylab("Proportion of C") + xlab("Temperature (C)") + theme_minimal() +
+  ggtitle(wrapper("Surface Soil :: Proportional Contribution of Density Fractions to Bulk Soil Thermograms", width = 50))
+
+Sd %>% join(temp_prop, by = "temp") %>%
+  dplyr::filter(Frac != "Bulk") %>%
+  dplyr::filter(temp > 100 & temp < 700) %>%
+  dplyr::mutate(NoiseOut = ifelse(Prop < 0.0015, 0, Prop)) %>% #View()
+  dplyr::mutate(whole_Prop = NoiseOut / sum_prop) %>% #View()
+  #dplyr::mutate(Fraction = Frac) %>% 
+  #dplyr::mutate(Frac = factor(Frac, levels = c(NA, "FPOM", "OPOM","MOM"), ordered = TRUE)) %>% 
+  ggplot(aes(x = temp, y = whole_Prop, fill = Fraction, color = Fraction)) + 
+    geom_area(position = "fill", alpha = 0.8, size = 1) +
+    scale_fill_manual(values = c('black','#fd8d3c',"#a63603",'#d94801')) +
+    scale_color_manual(values = c('black','#fd8d3c',"#a63603",'#d94801')) +
+    theme(panel.grid.major = element_blank(), axis.title = element_text(size = 15),
+          panel.grid.minor = element_blank(), axis.text = element_text(size = 12)) +
+    ylab("Proportion of C") + xlab("Temperature (C)") + theme_bw() +
+    scale_y_continuous(position = "right") +
+    xlim(130, 600) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          axis.title = element_text(size = 12),
+          axis.text = element_text(size = 11, face = "bold"),
+          legend.key.size = unit(0.8, "cm"),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 13)) -> p
+    # ggtitle(wrapper("Surface Soil :: Proportional Contribution of Density
+    #                 Fractions to Bulk Soil Thermograms", width = 50)) -> p
+
+Sd %>% filter(Frac == "Bulk") -> bo
+bo$FillNorm <- rollmean(na.spline((bo$Moving. / sum(bo$Moving., na.rm = T)), seq(1, length(bo$temp))), k = 9, align = 'center', fill = 0)
+
+p + geom_line(data = filter(bo, Frac == "Bulk"), mapping =  aes(temp, FillNorm * (1/max(FillNorm))), linetype = 1, size = 1.4, alpha = 0.8)
+
+
+
+```
+
+```{r Area filled thermogram stacks, Subsoil, echo = FALSE}
+
+#### Plots for viewing relative contribution to thermograms at temp
+library(plyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(tidyverse)
+library(magrittr)
+
+wrapper <- function(x, ...){
+  paste(strwrap(x, ...), collapse = "\n")
+}
+
+setwd('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/June2019_Thermos')
+
+Sdfiles <- list.files('./SubDens',
+           full.names = TRUE)
+
+#Sd <- ldply(Sd, read_csv)
+
+#surfProps <- subProps
+surfProps <- c(MOM = 76.3, FPOM = 15.6, OPOM = 8.2, NaF = 33.8, H2O2 = 15.9)
+
+Sd <- data.frame(matrix(ncol = 5))
+tz <- data.frame(temp = seq(100, 700))
+
+smoother = 10
+
+for(x in Sdfiles){
+  dat <- read.csv(x)
+  dat$CO2_normal <- dat$Moving. / max(dat$Moving.)
+
+  colnames(Sd) <- c('temp','Moving.',"Normal","Prop",'Frac')
+
+  if(grepl("Bulk", x)) {
+    dat$Frac = "Bulk"
+    dat$CO2_prop <- 1}
+  if(grepl("FPOM", x)) {
+    dat$Frac = "FPOM"
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["FPOM"] / 100)}
+  if(grepl("OPOM", x)) {
+    dat$Frac = "OPOM"
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["OPOM"] / 100)}
+  if(grepl("MOM", x)) {
+    dat$Frac = "MOM"
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["MOM"] / 100)}
+  if(grepl("H2O2", x)) {
+    dat$Frac = "H2O2 Res."
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["H2O2"] / 100)}
+  if(grepl("NaF", x)) {
+    dat$Frac = "NaF Res."
+    dat$CO2_prop <- dat$CO2_normal * (surfProps["NaF"] / 100)}
+
+  dat <- join(tz, dat)
+  dat <- data.frame(temp = dat$temp,
+                    Moving. = dat$Moving.,
+                    Normal = abs(dat$Moving. / max(na.omit(dat$Moving.))),
+                    Prop = rollmean(na.spline(dat$CO2_prop), smoother,
+                                    fill = abs(min(na.omit(dat$CO2_prop)))),
+                    Frac = sort(dat$Frac)[1])
+  Sd <- rbind(Sd, dat)
+}
+Sd <- Sd[-1,]
+#Sd$Frac <- factor(Sd$Frac, levels = c("MOM","H2O2 Res.","NaF Res."), ordered = TRUE)
+Sd$Frac <- factor(Sd$Frac, levels = c("FPOM","OPOM","MOM","Bulk"), ordered = TRUE)
+
+Sd %>%
+  filter(temp >= 100 & temp <= 700) %>%
+  ggplot(aes(x = temp, y = Normal, color = Frac)) + geom_line(size = 2) + theme_bw()
+  #ggplot(aes(x = temp, ymax = Normal, ymin = 0, fill = Frac)) + geom_ribbon() + theme_bw()
+
+Sd %>%
+  filter(temp >= 100 & temp <= 700 & Frac != "Bulk" ) %>%
+  ggplot(aes(x = temp, y = Prop, color = Frac)) + geom_line(size = 2) + theme_bw()
+
+# Sd %>%
+#   filter(temp >= 100 & temp <= 700 & Frac != "Bulk") %>%
+#   ggplot(aes(x = temp,fill = Frac)) +
+#     geom_bar(position = 'fill') + theme_minimal()
+
+Sd %>%
+  filter(Frac != "Bulk") %>%
+  group_by(temp) %>%
+  dplyr::summarize(Prop, sum_prop =sum(Prop))  -> temp_prop
+
+# temp_prop = data.frame(temp = unique(filter(temp_prop, temp > 140 & temp < 700)$temp),
+#                        tot_prop = unique(filter(temp_prop, temp > 140 & temp < 700)$sum_prop))
+
+#100% filled view
+# Sd %>% join(temp_prop) %>%
+#   filter(Frac != "Bulk") %>%
+#   mutate(whole_prop = Prop / tot_prop) %>%
+#   ggplot(aes(x = temp, y = whole_prop, fill = Frac)) + geom_area() +
+#   theme_minimal() + xlim(170, 700) +
+#   scale_fill_manual(values = c('steelblue', 'orange', 'green4'))
+
+Sd %>%
+  filter(Frac != "Bulk") %>%
+  group_by(temp) %>%
+  dplyr::summarize(Prop, sum_prop =sum(Prop)) -> temp_prop
+
+temp_prop <- data.frame(temp_prop[match(unique(temp_prop$temp), temp_prop$temp),])[-2]
+
+Sd$Frac <- factor(Sd$Frac, levels = c("Bulk", "MOM", "OPOM","FPOM"))
+Sd$Fraction <- factor(Sd$Frac, levels = c("Bulk", "MOM", "OPOM","FPOM"))
+
+Sd %>% join(temp_prop, by = "temp") %>%
+  filter(Frac != "Bulk") %>%
+  filter(temp > 160 & temp < 550) %>%
+  mutate(whole_Prop = Prop / sum_prop) %>%
+  ggplot(aes(x = temp, y = whole_Prop, fill = Frac)) + geom_area() +
+  scale_fill_manual(values = c("orange", 'darkgreen','steelblue3')) +
+  theme(panel.grid.major = element_blank(), axis.title = element_text(size = 15),
+        panel.grid.minor = element_blank(), axis.text = element_text(size = 12)) +
+  ylab("Proportion of C") + xlab("Temperature (C)") + theme_minimal() +
+  ggtitle(wrapper("Surface Soil :: Proportional Contribution of Density Fractions to Bulk Soil Thermograms", width = 50))
+
+Sd %>% join(temp_prop, by = "temp") %>%
+  dplyr::filter(Frac != "Bulk") %>%
+  dplyr::filter(temp > 100 & temp < 700) %>%
+  dplyr::mutate(NoiseOut = ifelse(Prop < 0.0015, 0, Prop)) %>% #View()
+  dplyr::mutate(whole_Prop = NoiseOut / sum_prop) %>% #View()
+  #dplyr::mutate(Frac = factor(Frac, levels = c(NA, "FPOM", "OPOM","MOM"), ordered = TRUE)) %>% 
+  ggplot(aes(x = temp, y = whole_Prop, fill = Fraction, color = Fraction)) + 
+    geom_area(position = "fill", alpha = 0.8, size = 1) +
+    scale_fill_manual(values = c('black','#fd8d3c',"#a63603",'#d94801')) +
+    scale_color_manual(values = c('black','#fd8d3c',"#a63603",'#d94801')) +
+    theme(panel.grid.major = element_blank(), axis.title = element_text(size = 15),
+          panel.grid.minor = element_blank(), axis.text = element_text(size = 12)) +
+    ylab("Proportion of C") + xlab("Temperature (C)") + theme_bw() +
+    xlim(130, 600) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          axis.title = element_text(size = 12),
+          axis.text = element_text(size = 11),
+          legend.key.size = unit(0.8, "cm"),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 13)) -> p
+    # ggtitle(wrapper("Surface Soil :: Proportional Contribution of Density
+    #                 Fractions to Bulk Soil Thermograms", width = 50)) -> p
+
+Sd %>% filter(Frac == "Bulk") -> bo
+bo$FillNorm <- rollmean(na.spline((bo$Moving. / sum(bo$Moving., na.rm = T)), seq(1, length(bo$temp))), k = 9, align = 'center', fill = 0)
+
+p + geom_line(data = filter(bo, Frac == "Bulk"), mapping =  aes(temp, FillNorm * (1/max(FillNorm))), linetype = 1, size = 1.4, alpha = 0.8)
+
+
+
+```
+
+```{r Surface Fm color-filled thermograms, echo = FALSE}
+#Bulk new way
+library(ggpubr)
+prop = TRUE
+
+#### COLORZ
+minFm <- 0.72
+maxFm <- 1.105
+cols = colorRampPalette(c('blue', 'gray99','red'))
+cols = cols((max(abs(maxFm-1), abs(minFm-1))*100) * 10 * 2)
+#Difference from 1, so that midpoint is Fm = 1, resolution of 0.01, and 2 sided.
+
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 Bulk/smooth_WeP4_0-10_Bulk_RPO.csv')
+isos <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 Bulk/WeP4_0-10_Bulk_Tail_Iso.csv')
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+
+bulkdat <- data.frame(matrix(ncol=10))
+colnames(bulkdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  bulkdat <- rbind(bulkdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+bulkdat <- bulkdat[-1,]
+
+SBp <- print(ggplot(bulkdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[2] & temp < isos$temp[3]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[3] & temp < isos$temp[4]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[4] & temp < isos$temp[5]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[5] & temp < isos$temp[6]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[6] & temp < isos$temp[7]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[7] & temp < isos$temp[8]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[8] & temp < isos$temp[9]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(bulkdat, temp > isos$temp[9] & temp < isos$temp[10]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) + xlab("") +
+  geom_text(x = 500, y = (0 + max(bulkdat$CO2_prop)) /2, label = "Bulk", size = 10) +
+  geom_line(color = "gray40") +
+  scale_fill_gradientn(colors = brkr(isos)$col,
+                       values = brkr(isos)$Break) +
+    theme(axis.title = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          legend.position = ""))
+                       #values = c(0, ((maxFm - 0) - (maxFm - 1)) / (maxFm - 0), maxFm))
+
+### MOM new way
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Surface/0-10 MOM/smooth_WeP4_0-10_MOM_Sept2_RPO.csv')
+isos = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 MOM/WeP4_0-10_MOM_Iso.csv')
+
+# isos <- data.frame(Fm = c(0,0,1.03747568,
+#                           0.991183909,
+#                           0.963070778,
+#                           0.944437271,
+#                           0.901211166,
+#                           0.727652603),
+#                    temp = c(0,140,
+#                             250,
+#                             335,
+#                             370,
+#                             400,
+#                             450,
+#                             800))
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.851}
+
+momdat <- data.frame(matrix(ncol=10))
+colnames(momdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  momdat <- rbind(momdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+momdat <- momdat[-1,]
+
+SMp <- print(ggplot(momdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+  geom_ribbon(data = filter(momdat, temp > isos$temp[2] & temp < isos$temp[3]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(momdat, temp > isos$temp[3] & temp < isos$temp[4]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(momdat, temp > isos$temp[4] & temp < isos$temp[5]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(momdat, temp > isos$temp[5] & temp < isos$temp[6]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(momdat, temp > isos$temp[6] & temp < isos$temp[7]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(momdat, temp > isos$temp[7] & temp < isos$temp[8]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +#xlab("") +
+    geom_line(color = "gray40") +
+    geom_text(x = 500, y = (0 + max(momdat$CO2_prop)) /2, label = "MOM", size = 10) +
+    scale_fill_gradientn(colors = brkr(isos)$col,
+                         values = brkr(isos)$Break) +
+    theme(axis.title = element_blank(),
+          panel.grid = element_blank(),
+          axis.text = element_text(size = 12),
+          legend.position = ""))
+
+SMp_chem <- print(ggplot(momdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[6] & temp < isos$temp[7]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[7] & temp < isos$temp[8]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +#xlab("") +
+               geom_line(color = "gray40") +
+                 geom_text(x = 500, y = (0 + max(momdat$CO2_prop)) /2, label = "MOM", size = 10) +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.y = element_text(size = 12),
+                     axis.text.x = element_blank(), ### Removing axis tick labels is the only change
+                     legend.position = ""))
+
+
+
+#### FPOM new way
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Surface/0-10 FPOM/smooth_WeP4_0-10_FPOM_re_RPO.csv')
+isos = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 FPOM/WeP4_0-10_FPOM_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.087}
+
+
+fpomdat <- data.frame(matrix(ncol=10))
+colnames(fpomdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  fpomdat <- rbind(fpomdat,
+                  data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                             frac = i,
+                             Fm = isos$Fm[i+2]))
+}
+
+fpomdat <- fpomdat[-1,]
+
+SFp <- print(ggplot(fpomdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+  geom_ribbon(data = filter(fpomdat, temp > isos$temp[2] & temp < isos$temp[3]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(fpomdat, temp > isos$temp[3] & temp < isos$temp[4]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(fpomdat, temp > isos$temp[4] & temp < isos$temp[5]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+  geom_ribbon(data = filter(fpomdat, temp > isos$temp[5] & temp < isos$temp[6]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +xlab("") + xlab("") +
+    geom_text(x = 500, y = (0 + max(fpomdat$CO2_prop)) /2, label = "FPOM", size = 10) +
+    geom_line(color = "gray40") +
+    scale_fill_gradientn(colors = brkr(isos)$col,
+                         values = brkr(isos)$Break) +
+    theme(axis.title = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          legend.position = ""))
+
+
+### OPOM new way
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Surface/0-10 OPOM/smooth_WeP4_0-10_OPOM_re_re_RPO.csv')
+isos = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 OPOM/WeP4_0-10_OPOM_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.062}
+
+opomdat <- data.frame(matrix(ncol=10))
+colnames(opomdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  opomdat <- rbind(opomdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+opomdat <- opomdat[-1,]
+
+SOp <- print(ggplot(opomdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+  geom_ribbon(data = filter(opomdat, temp > isos$temp[2] & temp < isos$temp[3]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+  geom_ribbon(data = filter(opomdat, temp > isos$temp[3] & temp < isos$temp[4]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+  geom_ribbon(data = filter(opomdat, temp > isos$temp[4] & temp < isos$temp[5]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+  geom_ribbon(data = filter(opomdat, temp > isos$temp[5] & temp < isos$temp[6]),
+              aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+    geom_line(color = "gray40") +
+    geom_text(x = 500, y = (0 + max(opomdat$CO2_prop)) /2, label = "OPOM", size = 10) +
+    scale_fill_gradientn(colors = brkr(isos)$col,
+                         values = brkr(isos)$Break) +
+    scale_color_gradientn(colors = brkr(isos)$col,
+                         values = brkr(isos)$Break) +
+    theme(axis.title = element_blank(),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          legend.position = ""))
+
+### Chemical fractions and mom
+###
+###
+
+
+#H2O2 Res
+
+dat <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Surface/0-10 H2O2/smooth_WeP4_0-10_H2O2Res_RPO.csv')
+isos <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 H2O2/WeP4_0-10_H2O2_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.135 * 0.851}
+
+h2O2dat <- data.frame(matrix(ncol=10))
+colnames(h2O2dat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  h2O2dat <- rbind(h2O2dat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+h2O2dat <- h2O2dat[-1,]
+
+SHp <- print(ggplot(h2O2dat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+               geom_text(x = 500, y = (0 + max(h2O2dat$CO2_prop)) /2, label = "H2O2", size = 10) +
+               geom_line(color = "gray40") +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_text(size = 12),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+## Extr Res
+
+dat <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 ExtrRes/smooth_WeP4_0-10_ExtrRes_RPO.csv')
+isos <- read.csv("/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNewFmCorr/0-10 ExtrRes/WeP4_0-10_ExtrRes_Iso.csv")
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.288 * 0.851}
+
+extrdat <- data.frame(matrix(ncol=10))
+colnames(extrdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  extrdat <- rbind(extrdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+extrdat <- extrdat[-1,]
+
+SEp <- print(ggplot(extrdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+               geom_text(x = 500, y = (0 + max(extrdat$CO2_prop)) /2, label = "NaF", size = 10) +
+               geom_line(color = "gray40") +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+### Combine 'em! Surf dens
+ggarrange(SBp, SFp, SOp, SMp, ncol = 1) ### Export SVG at 500 x 500 pixels
+
+### Combine 'em! Surf chem
+ggarrange(SMp_chem, SEp, SHp, ncol = 1) ### Export SVG at 500x500 pixels
+
+# Let's make a legend for it
+leg.isos <- data.frame(Fm = c(0,0,min(bulkdat$Fm, momdat$Fm, opomdat$Fm, fpomdat$Fm, h2O2dat$Fm, extrdat$Fm), 1, 
+                              max(bulkdat$Fm, momdat$Fm, opomdat$Fm, fpomdat$Fm, h2O2dat$Fm, extrdat$Fm)))
+#brkr(leg.isos)
+leg.dat <- data.frame(leg.isos,
+                      top = c(0,0,0,0,0),
+                      bottom = c(1,2,3,4,5)) 
+
+ggplot(leg.dat) +
+  geom_ribbon(data= leg.dat[3,],  aes(x = bottom, ymax = Fm, ymin = top, fill = Fm)) +
+  geom_ribbon(data= leg.dat[5,],  aes(x = bottom, ymax = Fm, ymin = top, fill = Fm)) +
+  scale_fill_gradientn(colors = brkr(leg.isos)$col,
+                       values = brkr(leg.isos)$Break) +
+  xlab("Temperature (˚C)") + ylab("Proportion of Total C Release") +
+  theme(legend.key.size = unit(1.5, 'cm'),
+        legend.title = element_text(size = 18),
+        legend.text = element_text(size = 16),
+        axis.title = element_text(size =16))
+
+```
+
+```{r Subsoil Fm color-filled thermograms, echo = FALSE}
+library(ggpubr)
+
+############ Subsoil
+minFm <- min(na.omit(sub$Fm))
+maxFm <- max(na.omit(sub$Fm))
+
+sub <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/WeP4_Isotopes_2020_Final_30-50.csv')
+
+
+### Bulk
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Subsoil/30-50 Bulk/smooth_WeP4_30-50_Bulk_Tail_RPO.csv')
+isos = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNewFmCorr/30-50 Bulk/WeP4_30-50_Bulk_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 1}
+
+bulkdat <- data.frame(matrix(ncol=10))
+colnames(bulkdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  bulkdat <- rbind(bulkdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+bulkdat <- bulkdat[-1,]
+
+
+sBp <- print(ggplot(bulkdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[6] & temp < isos$temp[7]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[7] & temp < isos$temp[8]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(bulkdat, temp > isos$temp[8] & temp < isos$temp[9]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               xlab("") +
+               geom_line(color = "gray40") +
+               geom_text(x = 500, y = (0 + max(bulkdat$CO2_prop)) /2, label = "Bulk", size = 10) +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+
+#FPOM
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Subsoil/30-50 FPOM/smooth_WeP4_30-50_FPOM_RPO.csv')
+isos <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNewFmCorr/30-50 FPOM/WeP4_30-50_FPOM_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.156}
+
+fpomdat <- data.frame(matrix(ncol=10))
+colnames(fpomdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  fpomdat <- rbind(fpomdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+fpomdat <- fpomdat[-1,]
+
+
+sFp <- print(ggplot(fpomdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(fpomdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(fpomdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(fpomdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(fpomdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+               geom_line(color = "gray40") +
+               geom_text(x = 550, y = (0 + max(fpomdat$CO2_prop)) /2, label = "FPOM", size = 10) +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+
+#OPOM
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Subsoil/30-50 OPOM/smooth_WeP2_30-50_OPOM_Thermogram_RPO.csv')
+isos <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 OPOM/WeP2_30-50_OPOM_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.082}
+
+opomdat <- data.frame(matrix(ncol=10))
+colnames(opomdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  opomdat <- rbind(opomdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+opomdat <- opomdat[-1,]
+
+
+sOp <- print(ggplot(opomdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(opomdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(opomdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(opomdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(opomdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+               geom_line(color = "gray40") +
+               geom_text(x = 550, y = (0 + max(opomdat$CO2_prop)) /2, label = "OPOM", size = 10) +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+
+#MOM
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Subsoil/30-50 MOM/smooth_WeP4_30-50_MOM_RPO.csv')
+isos <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNewFmCorr/30-50 MOM/WeP4_30-50_MOM_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.763}
+
+momdat <- data.frame(matrix(ncol=10))
+colnames(momdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  momdat <- rbind(momdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+momdat <- momdat[-1,]
+
+
+sMp <- print(ggplot(momdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[6] & temp < isos$temp[7]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+               geom_ribbon(data = filter(momdat, temp > isos$temp[7] & temp < isos$temp[8]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +#xlab("") +
+               geom_line(color = "gray40") +
+               geom_text(x = 500, y = (0 + max(momdat$CO2_prop)) /2, label = "MOM", size = 10) +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text = element_text(size = 12),
+                     legend.position = ""))
+
+sMp_chem <- print(ggplot(momdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+                    geom_ribbon(data = filter(momdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                                aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+                    geom_ribbon(data = filter(momdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                                aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+                    geom_ribbon(data = filter(momdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                                aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+                    geom_ribbon(data = filter(momdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                                aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+                    geom_ribbon(data = filter(momdat, temp > isos$temp[6] & temp < isos$temp[7]),
+                                aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +
+                    geom_ribbon(data = filter(momdat, temp > isos$temp[7] & temp < isos$temp[8]),
+                                aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm)) +#xlab("") +
+                    geom_line(color = "gray40") +
+                    geom_text(x = 500, y = (0 + max(momdat$CO2_prop)) /2, label = "MOM", size = 10) +
+                    scale_fill_gradientn(colors = brkr(isos)$col,
+                                         values = brkr(isos)$Break) +
+                    theme(axis.title = element_blank(),
+                          panel.grid = element_blank(),
+                          axis.text.y = element_text(size = 12),
+                          axis.text.x = element_blank(), ### Removing axis tick labels is the only change
+                          legend.position = ""))
+
+
+#values = c(0, ((maxFm - 0) - (maxFm - 1)) / (maxFm - 0), maxFm))
+
+### Chemical fractions
+#Extr Res
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/Subsoil/30-50 ExtrRes/smooth_WeP4_30-50_ExtrRes_re_RPO.csv')
+isos = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNewFmCorr/30-50 ExtrRes/WeP4_30-50_ExtrRes_Iso.csv')
+
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.299 * 0.763}
+
+extrdat <- data.frame(matrix(ncol=10))
+colnames(extrdat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  extrdat <- rbind(extrdat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+extrdat <- extrdat[-1,]
+
+sEp <- print(ggplot(extrdat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(extrdat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+               geom_text(x = 500, y = (0 + max(extrdat$CO2_prop)) /2, label = "NaF", size = 10) +
+               geom_line(color = "gray40") +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+#H2O2 
+dat = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 H2O2/smooth_WeP4_30-50_H2O2Res_RPO.csv')
+isos = read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNewFmCorr/30-50 H2O2/WeP4_30-50_H2O2_Iso.csv')
+
+dat$CO2_prop <- dat$CO2_scaled / max(dat$CO2_scaled)
+if(prop){dat$CO2_prop <- dat$CO2_prop * 0.155 * 0.763}
+
+h2O2dat <- data.frame(matrix(ncol=10))
+colnames(h2O2dat) <- c(colnames(dat), 'frac', 'Fm')
+for(i in seq(1:(length(isos$temp)-2))){
+  h2O2dat <- rbind(h2O2dat,
+                   data.frame(filter(dat,temp > isos$temp[i+1] & temp < isos$temp[i+2]),
+                              frac = i,
+                              Fm = isos$Fm[i+2]))
+}
+
+h2O2dat <- h2O2dat[-1,]
+
+sHp <- print(ggplot(h2O2dat, aes(x = temp, y = CO2_prop)) + xlim (150, 600) + theme_bw() +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[2] & temp < isos$temp[3]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[3] & temp < isos$temp[4]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[4] & temp < isos$temp[5]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) +
+               geom_ribbon(data = filter(h2O2dat, temp > isos$temp[5] & temp < isos$temp[6]),
+                           aes(x = temp, ymax = CO2_prop, ymin = 0, fill = Fm, color= Fm)) + xlab("") +
+               geom_text(x = 500, y = (0 + max(h2O2dat$CO2_prop)) /2, label = "H2O2", size = 10) +
+               geom_line(color = "gray40") +
+               scale_fill_gradientn(colors = brkr(isos)$col,
+                                    values = brkr(isos)$Break) +
+               scale_color_gradientn(colors = brkr(isos)$col,
+                                     values = brkr(isos)$Break) +
+               theme(axis.title = element_blank(),
+                     panel.grid = element_blank(),
+                     axis.text.x = element_text(size = 12),
+                     axis.text.y = element_text(size = 12),
+                     legend.position = ""))
+
+
+
+
+#Combine 'em! Sub Dens
+ggarrange(sBp, sFp, sOp, sMp, ncol = 1) ### Export SVG at 500 x 500 pixels
+
+#Combine 'em! Sub Chem
+ggarrange(sMp_chem, sEp, sHp, ncol = 1)
+
+# Let's make a legend for it
+leg.isos <- data.frame(Fm = c(0,0,min(bulkdat$Fm, momdat$Fm, opomdat$Fm, fpomdat$Fm, h2O2dat$Fm, extrdat$Fm), 1,
+                              max(bulkdat$Fm, momdat$Fm, opomdat$Fm, fpomdat$Fm, h2O2dat$Fm, extrdat$Fm)))
+#brkr(leg.isos)
+leg.dat <- data.frame(leg.isos,
+                      top = c(0,0,0,0,0),
+                      bottom = c(1,2,3,4,5))
+
+ggplot(leg.dat) +
+  geom_ribbon(data= leg.dat[3,],  aes(x = bottom, ymax = Fm, ymin = top, fill = Fm)) +
+  geom_ribbon(data= leg.dat[5,],  aes(x = bottom, ymax = Fm, ymin = top, fill = Fm)) +
+  scale_fill_gradientn(colors = brkr(leg.isos)$col,
+                       values = brkr(leg.isos)$Break) +
+  xlab("Temperature (˚C)") + ylab("Proportion of Total C Release") +
+  theme(legend.key.size = unit(1.5, 'cm'),
+        legend.title = element_text(size = 18),
+        legend.text = element_text(size = 16),
+        axis.title = element_text(size =16))
+
+```
+
+```{r Fm over activation energy and F14R, echo = FALSE}
+
+bigs <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/Thesis/Chapter2/Figures/BigResultsTable.csv',
+                 blank.lines.skip = TRUE)
+
+bigs$Fraction <- factor(bigs$Fraction, levels = c("Bulk Soil", "FPOM", "OPOM", "MOM",
+                                                  "NaF Res.", "H2O2 Res."),
+                        ordered = TRUE)
+
+bigs$Group <- factor(bigs$Group, levels = c("Density", "Chemical"), ordered = TRUE)
+
+bigs %>% drop_na("Number") %>%
+  filter(Group == 'Density') %>%
+  ggplot(aes(x = uE, y = Corr_Fm, color = Fraction)) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE)
+
+bigs %>% drop_na("Number") %>%
+  filter(Depth =='0-10') %>%
+  group_by(Fraction) %>%
+  mutate(FmNorm = Corr_Fm / max(Fm), errLow = uE - sigmaE, errHigh = uE + sigmaE) -> bigs2
+
+ggplot(bigs2, aes(x = uE, y = FmNorm, fill = Fraction, xmin = errLow, xmax = errHigh)) +
+    theme_bw() + facet_wrap(~Group) +
+    geom_errorbar() + ylab("Fm Normalized (F14R)") +
+    scale_fill_manual(values = fraccols) +
+    geom_smooth(method = lm, se = FALSE, color = 'black', size = 0.4, linetype = 3) +
+    geom_point(shape = 24, size = 4) + theme(text = element_text(size = 20))
+
+ggplot(bigs2, aes(x = uE, y = Corr_Fm, fill = Fraction, xmin = errLow, xmax = errHigh,
+                  ymax = Corr_Fm+Fm.error, ymin=Fm-Fm.error)) +
+  theme_bw() + facet_wrap(~Group) +
+  geom_errorbar() + ylab("Fm") +
+  geom_errorbarh() +
+  scale_fill_manual(values = fraccols) +
+  geom_smooth(method = lm, se = FALSE, color = 'black', linetype = 3, size = 0.4) +
+  geom_point(shape = 24, size = 4)  + theme(text = element_text(size = 20))
+
+bigs %>% drop_na("Number") %>%
+  #filter(Depth =='30-50') %>%
+  group_by(Fraction, Depth) %>%
+  mutate(FmNorm = Corr_Fm / max(Corr_Fm), errLow = uE - sigmaE, errHigh = uE + sigmaE) -> bigs2
+
+bigs2 %>% 
+  dplyr::mutate(Depth = paste(Depth, "cm")) %>% 
+ggplot(aes(x = uE, y = FmNorm, fill = Fraction, xmin = errLow, xmax = errHigh, shape = Fraction,
+                  ymax = FmNorm+Fm.error, ymin=FmNorm-Fm.error)) +
+  theme_bw() + facet_grid(c(~Depth, ~Group)) +
+  geom_errorbar() + ylab("F14R") +
+  geom_errorbarh() +
+  scale_fill_manual(values = fraccols) +
+  geom_smooth(method = lm, se = FALSE, color = 'black', size = 0.4, linetype = 3) +
+  geom_point(size = 5) + theme(text = element_text(size = 20)) +
+  scale_shape_manual(values = c(22, 24, 24, 24, 23, 23))
+
+bigs2 %>% ### Export 800 x 500
+  dplyr::mutate(Depth = paste(Depth, "cm")) %>% 
+ggplot(aes(x = uE, y = d13C, fill = Fraction, shape = Fraction,
+                  xmin = errLow, xmax = errHigh,
+                  ymax = d13C+d13C.Error, ymin=d13C-d13C.Error)) +
+  theme_bw() + facet_grid(c(~Depth, ~Group)) +
+  #xlim(120, 200) +
+  #geom_errorbar() + #ylab("Fm Normalized (F14R)") +
+  geom_errorbarh() +
+  scale_fill_manual(values = fraccols) +
+  theme(strip.background = element_rect(fill = 'white')) +
+  xlab(expression(paste(italic(mu*E)~` (kJ `~mol^-1*`)`)))  +
+  ylab(expression(italic(delta)^13*C)) +
+  geom_smooth(method = lm, se = FALSE, color = 'black', size = 0.4, linetype = 3) +
+  geom_point(size = 5) + theme(text = element_text(size = 20)) +
+  scale_shape_manual(values = c(22, 24, 24, 24, 23, 23))
+
+bigs2 %>% 
+  dplyr::mutate(Depth = paste(Depth, "cm")) %>% 
+ggplot(aes(x = uE, y = Corr_Fm, fill = Fraction, xmin = errLow, xmax = errHigh,
+                  ymax = Fm+Fm.error, ymin=Corr_Fm-Fm.error, shape = Fraction)) +
+  theme_bw() + facet_grid(c(~Depth, ~Group)) +
+  geom_errorbar() + ylab("Fraction Modern (Fm)") +
+  theme(strip.background = element_rect(fill = 'white')) +
+  xlab(expression(paste(italic(mu*E)~` (kJ `~mol^-1*`)`)))  +
+  geom_errorbarh() + ylim(0.2, 1.18) +
+  scale_fill_manual(values = fraccols) +
+  geom_smooth(method = lm, se = FALSE, color = 'black', linetype = 3, size = 0.4) +
+  geom_point(size = 5)  + theme(text = element_text(size = 20)) +
+  scale_shape_manual(values = c(22, 24, 24, 24, 23, 23))
+
+```
+
+```{r Cumulative left-to-right, relative 14C plots, echo = FALSE}
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(tidyverse)
+
+wep <- read.csv('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_All/WeP4_Fraction_Isotopes_Final_Tails.csv')
+Err14C <- unlist(na.omit(wep$Cum14C_Final - wep$Bulk_14C))
+
+colnames(wep)
+wep$Age_Calc <- -8033 * log(wep$Corr_Fm)
+wep$Age_Calc_err <- -8033 * log(wep$Fm_err)
+
+colorz <- c('#d53e4f','#f46d43','#fdae61','#abdda4','#66c2a5','#3288bd')
+wep$Frac <- factor(wep$Frac, levels = c('Bulk', 'FPOM', 'OPOM', 'MOM', 'NaF Res.', 'H2O2 Res.','H2O2 Extract', 'NaF Extract') )
+
+wep <- wep %>% filter(!(wep$Frac %in% c('H2O2 Extract', 'NaF Extract')))
+wep$Depth <- as.factor(wep$Depth)
+
+wep$FracPropTot
+wep$UltTotC <- wep$FracPropTot * wep$CummC_Final
+
+Surf = dplyr::filter(wep, wep$Depth == '0-10 cm')
+Surf$PerC_cumu <- Surf$UltTotC * 7.5 # Percent C, so total of soil C
+Sub = dplyr::filter(wep, wep$Depth == '30-50 cm')
+Sub$PerC_cumu <- Sub$UltTotC * 2.38 # Percent C, so total of soil C
+Sub$PerC_cumu[1:8] <- FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 Bulk/smooth_WeP4_30-50_Bulk_Tail_RPO.csv',
+                               temps_in = filter(sub, Frac == 'Bulk' & !is.na(Frac_No))$Max_T)[,2]
+
+### Surface
+SurfBulk <- Surf %>% dplyr::filter(., Frac == 'Bulk')
+SurfBulk$UltTotC <- SurfBulk$PerC_cumu
+SurfBulk$PerC_cumu <- SurfBulk$UltTotC * 7.5
+SurfBulk <- SurfBulk[order(SurfBulk$Fm),]
+SurfBulk$CumC_Fm <- cumsum(SurfBulk$UltTotC)
+
+Surf = dplyr::filter(wep, wep$Depth == '0-10 cm')
+Surf$PerC_cumu <- Surf$UltTotC * 2.38 # Percent C, so total of soil C
+
+SurfDens <- Surf %>% 
+  dplyr::filter(Frac %in% c("FPOM", "OPOM", "MOM")) %>% 
+  dplyr::arrange(Corr_Fm) %>% #glimpse()
+  #dplyr::group_by(Frac) %>% 
+  dplyr::mutate(CumC_Fm = cumsum(UltTotC))
+
+SurfBulk <- Surf %>% filter(., Frac == 'Bulk')
+SurfBulk$CummC_Final <- c(.041, .217, .389, .185, .073, 0.042, 0.027, 0.026)
+SurfBulk$UltTotC <- SurfBulk$CummC_Final
+SurfBulk$PerC_cumu <- SurfBulk$UltTotC * 2.38
+SurfBulk <- SurfBulk[order(SurfBulk$Fm),]
+SurfBulk$CumC_Fm <- cumsum(SurfBulk$UltTotC)
+
+Surf_ <- rbind(SurfBulk, SurfDens[1:(length(SurfDens))])
+Surf_$Frac <- factor(Surf_$Frac, levels = c("Bulk",'FPOM',"OPOM","MOM"), ordered = TRUE)
+
+#Surf_ <- rbind(SurfBulk, SurfDens[1:(length(SurfDens))])
+
+Surf_ %>% 
+  dplyr::mutate(Fraction = factor(Frac, levels = c("Bulk","FPOM", "OPOM", "MOM"), ordered = TRUE)) %>% #glimpse()
+ggplot(aes(CumC_Fm, Corr_Fm, fill = Fraction, color = Fraction)) + xlim(0,1) + theme_bw() +
+  geom_rect(ymax = 0, ymin = Surf_$Fm - 0.9972,
+            xmax = Surf_$CumC_Fm, xmin = Surf_$CumC_Fm - Surf_$UltTotC,
+            alpha = 1 - (0.4/Surf_$Frac_No), size = 1.0) + ylim(-0.26, 0.105) +
+  scale_fill_manual(values = c('white','#377eb8','#ff7f00','#4daf4a')) +
+  scale_color_manual(values = c('black', '#377eb8','#ff7f00','#4daf4a')) +
+      xlab("Cumulative Fraction C") +
+    ylab("Relative Fm") + labs("Fraction") +
+    theme(axis.text = element_text(size = 11),
+          axis.title = element_text(size = 13),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 13)) +
+    geom_rect(data = Surf_ %>% dplyr::filter(Frac == "Bulk") %>% dplyr::mutate(Fraction = Frac), 
+              aes(ymax = 0, ymin = Fm - 0.9972,
+              xmax = CumC_Fm, xmin = CumC_Fm - UltTotC), color = "black", size = 0.8, alpha = 0)
+
+
+#### Subsoil
+SubBulk <- Sub %>% dplyr::filter(., Frac == 'Bulk')
+SubBulk$UltTotC <- SubBulk$PerC_cumu
+SubBulk$PerC_cumu <- SubBulk$UltTotC * 7.5
+SubBulk <- SubBulk[order(SubBulk$Corr_Fm),]
+SubBulk$CumC_Fm <- cumsum(SubBulk$UltTotC)
+
+Sub = dplyr::filter(wep, wep$Depth == '30-50 cm')
+Sub$PerC_cumu <- Sub$UltTotC * 2.38 # Percent C, so total of soil C
+
+SubDens <- Sub %>% 
+  dplyr::filter(Frac %in% c("FPOM", "OPOM", "MOM")) %>% 
+  dplyr::arrange(Corr_Fm) %>% #glimpse()
+  #dplyr::group_by(Frac) %>% 
+  dplyr::mutate(CumC_Fm = cumsum(UltTotC))
+
+Sub_ <- rbind(SubBulk, SubDens[1:(length(SubDens))])
+Sub_$Frac <- factor(Sub_$Frac, levels = c("Bulk",'FPOM',"OPOM","MOM"), ordered = TRUE)
+
+#Subsoil verison
+SubBulk <- Sub %>% filter(., Frac == 'Bulk')
+SubBulk$CummC_Final <- c(.159, .363, .1497, .113, .091, 0.073, 0.051)
+SubBulk$Fm <- c(0.8328,0.84,0.853,0.8535,0.8323,0.7927,0.3227)
+SubBulk$UltTotC <- SubBulk$CummC_Final
+SubBulk$PerC_cumu <- SubBulk$UltTotC * 2.38
+SubBulk <- SubBulk[order(SubBulk$Corr_Fm),]
+SubBulk$CumC_Fm <- cumsum(SubBulk$UltTotC)
+
+Sub_ <- rbind(SubBulk, SubDens[1:(length(SubDens))])
+
+Sub_ %>% 
+  dplyr::mutate(Fraction = factor(Frac, levels = c("Bulk","FPOM", "OPOM", "MOM"), ordered = TRUE)) %>% #glimpse()
+  ggplot(aes(CumC_Fm, Corr_Fm, fill = Fraction, color = Fraction)) + xlim(0,1) + theme_bw() +
+    geom_rect(ymax = 0, ymin = Sub_$Fm - 0.824,
+              xmax = Sub_$CumC_Fm, xmin = Sub_$CumC_Fm - Sub_$UltTotC,
+              alpha = 1 - (0.4/Sub_$Frac_No), size = 1.0) + ylim(-0.51, 0.26) +
+    scale_fill_manual(values = c('white','#377eb8','#ff7f00','#4daf4a')) +
+    scale_color_manual(values = c('white','#377eb8','#ff7f00','#4daf4a')) +
+  # geom_rect(data = Sub_ %>% dplyr::filter(Frac == "Bulk"), 
+  #             aes(ymax = 0, ymin = Fm - 0.824,
+  #             xmax = CumC_Fm, xmin = CumC_Fm - UltTotC), alpha = 0) +
+    xlab("Cumulative Fraction C") +
+    ylab("Relative Fm") + labs("Fraction") +
+    theme(axis.text = element_text(size = 11),
+          axis.title = element_text(size = 13),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 13)) +
+    geom_rect(data = Sub_ %>% dplyr::filter(Frac == "Bulk") %>% dplyr::mutate(Fraction = Frac), 
+              aes(ymax = 0, ymin = Fm - 0.824,
+              xmax = CumC_Fm, xmin = CumC_Fm - UltTotC), color = "black", size = 0.8, alpha = 0)
+  
+```
+
+```{r brkr color function}
+
+brkr <- function(isos, plots = FALSE){
+  clz <- c(`0.2` = 'purple1', `0.3` = 'purple3',`0.4` = 'purple4',`0.5` = '#084594', `0.6` = '#2171b5',`0.7` = '#4292c6',`0.8` = '#6baed6', `0.9` = '#9ecae1',
+           `z1.0` = 'gray95',
+           `a1.05` ='#fddbc7', `b1.1` = '#d6604d', `c1.15`= '#67001f')
+
+  cols = colorRampPalette(clz[1:9])
+  colsO = cols(length(seq(0.2, 1.0, by = 0.005)))
+  cols = colorRampPalette(clz[10:13])
+  colsY = cols(length(seq(1.005, 1.15, by = 0.005)))
+
+  ll <- seq(0.2, 1.0, by = 0.005)
+  mm <- seq(1.005, 1.15, by = 0.005)
+
+  if(plots == TRUE) plot(c(ll, mm), col = c(colsO, colsY), pch = 16, cex = 2)
+  if(plots == TRUE) abline(,,1)
+
+  bigfmcol <- data.frame(Fm = c(ll,mm),
+                         col = c(colsO, colsY))
+
+  lr <- range(isos$Fm[3:length(isos$Fm)])[1]
+  hr <- range(isos$Fm[3:length(isos$Fm)])[2]
+  sl <- lm(y~x,
+           data =data.frame(x = range(isos$Fm[3:length(isos$Fm)]), y = c(0,1)))$coefficients
+
+  brkr <- c(0)
+  selc <- c(bigfmcol[which(abs(lr-bigfmcol$Fm)==min(abs(lr-bigfmcol$Fm)))-1,]$col)
+  nlist <- c(lr)
+  nos = c(seq(0.2, 1.0, by = 0.1), 1.05, 1.1, 1.15)
+  for(x in nos[which(nos > lr & nos < hr)]){
+    nlist <- c(nlist, x)
+    selc <- c(selc, bigfmcol[which(abs(x-bigfmcol$Fm)==min(abs(x-bigfmcol$Fm))),]$col)
+    brkr <- c(brkr, (x * sl[2]) + sl[1])
+    if(x == 1.0) x = 'z1.0'
+    if(x == 1.05) x = 'a1.05'
+    if(x == 1.1) x = 'b1.1'
+    if(x == 1.15) x = 'c1.15'
+    #selc <- c(selc, clz[grep(x, names(clz))])
+  }
+  #names(brkr) = c(nos[which(nos > lr & nos < hr)])
+
+  nlist <- c(nlist, hr)
+  brkr <- c(brkr, 1)
+  selc <- c(selc, bigfmcol[which(abs(hr-bigfmcol$Fm)==min(abs(hr-bigfmcol$Fm)))+1,]$col)
+
+  if(plots == TRUE) abline(,,nlist, lty = 2)
+
+  return(data.frame(Num = nlist, Break = brkr, col = selc))
+}
+brkr(isos = data.frame(Fm = c(0,0,0.21, 0.8, 1, 1.09)), plots = TRUE)
+
+```
+
+```{r Fraction sizes, echo = FALSE}
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 Bulk/smooth_WeP4_0-10_Bulk_RPO.csv',
+              temps_in = c(205, 260, 310, 350, 380, 410, 450),
+              perC = 7.7)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 FPOM/smooth_WeP4_0-10_FPOM_re_RPO.csv',
+              temps_in = c(240, 315, 400), perC = 32)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 OPOM/smooth_WeP4_0-10_OPOM_re_re_RPO.csv',
+              temps_in = c(260, 320, 400), perC = 42)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 MOM/smooth_WeP4_0-10_MOM_Sept2_RPO copy.csv',
+              temps_in = c(250, 330, 370, 400, 450), perC = 5.273)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 ExtrRes/smooth_WeP4_0-10_ExtrRes_RPO.csv',
+              temps_in = c(285, 355, 440), perC = 1.78)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SurfaceNew/0-10 H2O2/smooth_WeP4_0-10_H2O2_RPO.csv',
+              temps_in = c(275, 330, 380), perC = 0.839)
+
+
+### Subsoil
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 Bulk/smooth_WeP4_30-50_Bulk_Tail_RPO.csv',
+              temps_in = c(280, 335, 375, 415, 455, 505), perC = 3.7)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 FPOM/smooth_WeP4_30-50_FPOM_RPO.csv',
+              temps_in = c(290, 350, 400), perC = 28.2)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 OPOM/smooth_WeP2_30-50_OPOM_Thermogram_RPO.csv',
+              temps_in = c(285, 370, 435), perC = 40.1)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 MOM/smooth_WeP4_30-50_MOM_RPO.csv',
+              temps_in = c(285, 345, 415, 455, 505), perC = 2.977)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 MOM/smooth_WeP4_30-50_MOM_RPO.csv',
+              temps_in = c(285, 345, 385), perC = 2.977)
+
+FractionSizes('/Users/shane/14Constraint Dropbox/Shane Stoner/IMPRS/ThermalAnalysis/Ch2/WeP4_Pyrox_New/SubsoilNew/30-50 H2O2/smooth_WeP4_30-50_H2O2Res_RPO.csv',
+              temps_in = c(302, 354, 402), perC = 0.751)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
